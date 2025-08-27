@@ -1,0 +1,93 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.example.filesystem'
+version = '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Local JAR dependencies (copied from Hyper API project)
+    implementation fileTree(dir: 'lib', include: '*.jar')
+    
+    // Test dependencies
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'com.example.filesystem.LoadFilesystemMetadata'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Task to copy JARs from the original Hyper API project
+task copyHyperApiJars(type: Copy) {
+    from '../hyper-api-java-ai/lib'
+    into 'lib'
+    include '*.jar'
+    doFirst {
+        println "Copying Hyper API JARs from ../hyper-api-java-ai/lib to lib/"
+    }
+}
+
+// Make sure JARs are copied before building
+compileJava.dependsOn copyHyperApiJars
+
+// Custom run task with better argument handling
+task runWithArgs(type: JavaExec) {
+    group = 'application'
+    description = 'Run the filesystem metadata scanner with arguments'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = application.mainClass
+    
+    // Enable console input
+    standardInput = System.in
+    
+    // Pass system properties and arguments
+    systemProperties = System.properties
+    if (project.hasProperty('args')) {
+        args(project.property('args').toString().split(','))
+    }
+}
+
+// Custom task to show usage
+task usage {
+    group = 'help'
+    description = 'Show usage information for the filesystem metadata scanner'
+    doLast {
+        println """
+Filesystem Metadata Scanner Usage:
+
+Build and run:
+    gradlew build
+    gradlew run
+
+Run with arguments:
+    gradlew run --args="--root /path/to/scan --depth 5 --verbose"
+
+Available arguments:
+    --root <path>         : Directory to scan (default: user home)
+    --depth <number>      : Maximum scan depth (default: 3, range: 1-20)
+    --skip-hidden         : Skip hidden and system files
+    --verbose             : Show detailed analysis results
+    --query-existing <file> : Query existing database instead of scanning
+
+Examples:
+    gradlew run --args="--root . --depth 2"
+    gradlew run --args="--root C:\\Users\\username\\Documents --depth 4 --skip-hidden --verbose"
+    gradlew run --args="--query-existing my_scan_metadata.hyper --verbose"
+        """
+    }
+}
