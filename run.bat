@@ -70,7 +70,7 @@ echo.
 echo Build successful! 
 echo.
 
-REM If no arguments provided, show usage
+REM If no arguments provided, show usage and run with defaults
 if "%~1"=="" (
     echo Usage: run.bat [OPTIONS]
     echo.
@@ -95,7 +95,11 @@ if "%~1"=="" (
 ) else (
     echo Running with arguments: %*
     echo.
-    call gradlew.bat run --args="%*"
+    if "%*"=="" (
+        call gradlew.bat run
+    ) else (
+        call gradlew.bat run --args="%*"
+    )
 )
 
 echo.
