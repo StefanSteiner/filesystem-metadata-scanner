@@ -86,9 +86,50 @@
    source ~/.bashrc
    ```
 
+## Hyper API Setup
+
+This project requires the Tableau Hyper API Java package. You need to set the `HAPI_JAVA_PACKAGE` environment variable to point to your Hyper API Java installation.
+
+### Setting HAPI_JAVA_PACKAGE
+
+**Windows (PowerShell):**
+```powershell
+# Set for current session
+$env:HAPI_JAVA_PACKAGE = "C:\path\to\hyper-api-java"
+
+# Set permanently (requires restart)
+[Environment]::SetEnvironmentVariable("HAPI_JAVA_PACKAGE", "C:\path\to\hyper-api-java", "User")
+```
+
+**Windows (CMD):**
+```cmd
+# Set for current session
+set HAPI_JAVA_PACKAGE=C:\path\to\hyper-api-java
+
+# Set permanently
+setx HAPI_JAVA_PACKAGE "C:\path\to\hyper-api-java"
+```
+
+**Linux/macOS:**
+```bash
+# Set for current session
+export HAPI_JAVA_PACKAGE=/path/to/hyper-api-java
+
+# Set permanently (add to ~/.bashrc, ~/.zshrc, or ~/.profile)
+echo 'export HAPI_JAVA_PACKAGE=/path/to/hyper-api-java' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Verifying Hyper API Setup
+
+The build system will automatically:
+- Look for JAR files in `$HAPI_JAVA_PACKAGE/lib`
+- Search for `hyperd.exe` (Windows) or `hyperd` (Linux/macOS) in multiple locations
+- Configure native library paths for the Hyper API
+
 ## Building the Project
 
-Once Java is properly installed and configured:
+Once Java and HAPI_JAVA_PACKAGE are properly configured:
 
 ```bash
 # Build the project
@@ -133,6 +174,18 @@ gradlew.bat run --args="--root . --depth 2 --verbose"  # Windows
    chmod +x gradlew  # Linux/macOS only
    ```
 
+5. **"The Hyper executable does not exist" error**:
+   - Verify HAPI_JAVA_PACKAGE is set and points to correct directory
+   - Check that the Hyper API package contains hyperd.exe or hyperd
+   - Ensure you have the complete Hyper API package, not just JAR files
+
+6. **"Could not find hyperd executable in HAPI_JAVA_PACKAGE"**:
+   - The build system searches for hyperd in these locations within HAPI_JAVA_PACKAGE:
+     - `lib/hyper/hyperd.exe` or `lib/hyper/hyperd`
+     - `hyper/hyperd.exe` or `hyper/hyperd`
+     - `bin/hyperd.exe` or `bin/hyperd`
+   - Verify your Hyper API package structure matches one of these patterns
+
 ### Verifying Setup
 
 Run these commands to verify your setup:
@@ -146,9 +199,18 @@ echo $JAVA_HOME          # Linux/macOS
 echo %JAVA_HOME%         # Windows CMD
 echo $env:JAVA_HOME      # Windows PowerShell
 
+# Check HAPI_JAVA_PACKAGE
+echo $HAPI_JAVA_PACKAGE  # Linux/macOS
+echo %HAPI_JAVA_PACKAGE% # Windows CMD
+echo $env:HAPI_JAVA_PACKAGE # Windows PowerShell
+
 # Test Gradle wrapper
 ./gradlew --version      # Linux/macOS
 gradlew.bat --version    # Windows
+
+# Test Hyper API detection
+./gradlew usage          # Linux/macOS - shows detailed setup info
+gradlew.bat usage        # Windows - shows detailed setup info
 ```
 
 ## IDE Setup

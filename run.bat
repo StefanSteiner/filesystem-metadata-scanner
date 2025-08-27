@@ -5,6 +5,25 @@ REM This script attempts to find Java and run the scanner
 echo Filesystem Metadata Scanner
 echo ==============================
 
+REM Check if HAPI_JAVA_PACKAGE is set
+if not defined HAPI_JAVA_PACKAGE (
+    echo WARNING: HAPI_JAVA_PACKAGE environment variable is not set!
+    echo.
+    echo Please set HAPI_JAVA_PACKAGE to point to your Hyper API Java package:
+    echo Example: set HAPI_JAVA_PACKAGE=C:\path\to\hyper-api-java
+    echo.
+    echo The application may fail to start without proper Hyper API setup...
+    echo.
+) else (
+    echo Using HAPI_JAVA_PACKAGE: %HAPI_JAVA_PACKAGE%
+    if exist "%HAPI_JAVA_PACKAGE%\lib" (
+        echo Found Hyper API libraries in: %HAPI_JAVA_PACKAGE%\lib
+    ) else (
+        echo WARNING: %HAPI_JAVA_PACKAGE%\lib directory not found!
+    )
+    echo.
+)
+
 REM Check if JAVA_HOME is set
 if defined JAVA_HOME (
     echo Using JAVA_HOME: %JAVA_HOME%
@@ -54,6 +73,9 @@ echo.
 REM If no arguments provided, show usage
 if "%~1"=="" (
     echo Usage: run.bat [OPTIONS]
+    echo.
+    echo IMPORTANT: Set HAPI_JAVA_PACKAGE environment variable first:
+    echo   set HAPI_JAVA_PACKAGE=C:\path\to\hyper-api-java
     echo.
     echo Options:
     echo   --root PATH          Directory to scan (default: home directory)
