@@ -16,14 +16,14 @@ repositories {
 }
 
 dependencies {
-    // Hyper API dependencies - prioritize HAPI_JAVA_PACKAGE, fallback to local lib
-    if (System.getenv('HAPI_JAVA_PACKAGE')) {
-        implementation fileTree(dir: "${System.getenv('HAPI_JAVA_PACKAGE')}/lib", include: '*.jar')
-        println "Using Hyper API JARs from HAPI_JAVA_PACKAGE: ${System.getenv('HAPI_JAVA_PACKAGE')}/lib"
-    } else {
-        implementation fileTree(dir: 'lib', include: '*.jar')
-        println "Using local Hyper API JARs from: lib/"
+    // Hyper API dependencies from HAPI_JAVA_PACKAGE (required)
+    def hapiPackage = System.getenv('HAPI_JAVA_PACKAGE')
+    if (!hapiPackage) {
+        throw new GradleException("HAPI_JAVA_PACKAGE environment variable must be set to the Hyper API Java package directory")
     }
+    
+    implementation fileTree(dir: "${hapiPackage}/lib", include: '*.jar')
+    println "Using Hyper API JARs from: ${hapiPackage}/lib"
     
     // Test dependencies
     testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
@@ -38,96 +38,43 @@ test {
     useJUnitPlatform()
 }
 
-// Task to copy JARs - only needed if HAPI_JAVA_PACKAGE is not set
-task copyHyperApiJars(type: Copy) {
-    // Skip if HAPI_JAVA_PACKAGE is set (will use JARs directly from there)
-    onlyIf { 
-        def skipReason = ""
-        if (System.getenv('HAPI_JAVA_PACKAGE')) {
-            skipReason = "HAPI_JAVA_PACKAGE is set, using JARs from: ${System.getenv('HAPI_JAVA_PACKAGE')}/lib"
-            println "Skipping JAR copy: ${skipReason}"
-            return false
-        }
-        return true
-    }
-    
-    // Try multiple possible source locations
-    def possibleSources = [
-        '../hyper-api-java-ai/lib',
-        '../hyper-api-java/lib'
-    ]
-    
-    def sourceDir = possibleSources.find { file(it).exists() }
-    
-    if (sourceDir) {
-        from sourceDir
-        into 'lib'
-        include '*.jar'
-        doFirst {
-            println "Copying Hyper API JARs from ${sourceDir} to lib/"
-        }
-    } else {
-        doFirst {
-            println "Warning: No Hyper API source directory found and HAPI_JAVA_PACKAGE not set."
-            println "Checked: ${possibleSources}"
-            println "Either set HAPI_JAVA_PACKAGE or place JARs manually in lib/ directory."
-        }
-    }
-}
+// No JAR copying needed - always use HAPI_JAVA_PACKAGE
 
-// Make sure JARs are copied before building (only if needed)
-compileJava.dependsOn copyHyperApiJars
-
-// Helper function to setup Hyper API paths
+// Helper function to setup Hyper API paths from HAPI_JAVA_PACKAGE
 def setupHyperApiPaths() {
     def hapiPackage = System.getenv('HAPI_JAVA_PACKAGE')
+    if (!hapiPackage) {
+        throw new GradleException("HAPI_JAVA_PACKAGE environment variable must be set")
+    }
     
-    if (hapiPackage) {
-        def hapiDir = file(hapiPackage)
-        if (!hapiDir.exists()) {
-            throw new GradleException("HAPI_JAVA_PACKAGE directory does not exist: ${hapiPackage}")
-        }
+    def hapiDir = file(hapiPackage)
+    if (!hapiDir.exists()) {
+        throw new GradleException("HAPI_JAVA_PACKAGE directory does not exist: ${hapiPackage}")
+    }
+    
+    // Look for hyperd.exe in common locations within the Hyper API package
+    def possibleHyperdPaths = [
+        "${hapiPackage}/lib/hyper/hyperd.exe",                    // Windows typical path
+        "${hapiPackage}/lib/hyper/hyperd",                       // Linux/Mac typical path
+        "${hapiPackage}/hyper/hyperd.exe",                       // Alternative Windows path
+        "${hapiPackage}/hyper/hyperd",                           // Alternative Linux/Mac path
+        "${hapiPackage}/bin/hyperd.exe",                         // Another possible Windows path
+        "${hapiPackage}/bin/hyperd"                              // Another possible Linux/Mac path
+    ]
+    
+    def hyperdPath = possibleHyperdPaths.find { file(it).exists() }
+    
+    if (hyperdPath) {
+        def hyperdDir = file(hyperdPath).parent
+        println "Found hyperd at: ${hyperdPath}"
+        println "Setting Hyper native library path to: ${hyperdDir}"
         
-        // Look for hyperd.exe in common locations within the Hyper API package
-        def possibleHyperdPaths = [
-            "${hapiPackage}/lib/hyper/hyperd.exe",                    // Windows typical path
-            "${hapiPackage}/lib/hyper/hyperd",                       // Linux/Mac typical path
-            "${hapiPackage}/hyper/hyperd.exe",                       // Alternative Windows path
-            "${hapiPackage}/hyper/hyperd",                           // Alternative Linux/Mac path
-            "${hapiPackage}/bin/hyperd.exe",                         // Another possible Windows path
-            "${hapiPackage}/bin/hyperd"                              // Another possible Linux/Mac path
+        return [
+            'tableau.hyper.libpath': hyperdDir,
+            'java.library.path': hyperdDir
         ]
-        
-        def hyperdPath = possibleHyperdPaths.find { file(it).exists() }
-        
-        if (hyperdPath) {
-            def hyperdDir = file(hyperdPath).parent
-            println "Found hyperd at: ${hyperdPath}"
-            println "Setting Hyper native library path to: ${hyperdDir}"
-            
-            // Set system properties for Hyper API
-            System.setProperty('tableau.hyper.libpath', hyperdDir)
-            System.setProperty('java.library.path', hyperdDir)
-            
-            return [
-                'tableau.hyper.libpath': hyperdDir,
-                'java.library.path': hyperdDir
-            ]
-        } else {
-            println "Warning: Could not find hyperd executable in HAPI_JAVA_PACKAGE."
-            println "Searched in: ${possibleHyperdPaths}"
-            return [:]
-        }
     } else {
-        println "HAPI_JAVA_PACKAGE not set. Using local lib directory if available."
-        def localLib = file('lib')
-        if (localLib.exists()) {
-            return [
-                'tableau.hyper.libpath': localLib.absolutePath,
-                'java.library.path': localLib.absolutePath
-            ]
-        }
-        return [:]
+        throw new GradleException("Could not find hyperd executable in HAPI_JAVA_PACKAGE. Searched in: ${possibleHyperdPaths}")
     }
 }
 
@@ -174,8 +121,8 @@ task usage {
         println """
 Filesystem Metadata Scanner Usage:
 
-Setup (Required):
-    Set HAPI_JAVA_PACKAGE environment variable to your Hyper API Java package directory:
+REQUIRED Setup:
+    HAPI_JAVA_PACKAGE environment variable MUST be set to your Hyper API Java package directory:
     
     Windows (PowerShell):
         \$env:HAPI_JAVA_PACKAGE = "C:\\path\\to\\hyper-api-java"
@@ -205,7 +152,7 @@ Examples:
     gradlew run --args="--root C:\\Users\\username\\Documents --depth 4 --skip-hidden --verbose"
     gradlew run --args="--query-existing my_scan_metadata.hyper --verbose"
 
-Note: The build system will automatically locate hyperd.exe within the HAPI_JAVA_PACKAGE directory.
+Note: The build will FAIL if HAPI_JAVA_PACKAGE is not set or invalid.
         """
     }
 }

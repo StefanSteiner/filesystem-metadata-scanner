@@ -86,9 +86,9 @@
    source ~/.bashrc
    ```
 
-## Hyper API Setup
+## Hyper API Setup (Required)
 
-This project requires the Tableau Hyper API Java package. You need to set the `HAPI_JAVA_PACKAGE` environment variable to point to your Hyper API Java installation.
+This project **requires** the Tableau Hyper API Java package. You **must** set the `HAPI_JAVA_PACKAGE` environment variable to point to your Hyper API Java installation before building or running the application.
 
 ### Setting HAPI_JAVA_PACKAGE
 
@@ -123,9 +123,10 @@ source ~/.bashrc
 ### Verifying Hyper API Setup
 
 The build system will automatically:
-- Look for JAR files in `$HAPI_JAVA_PACKAGE/lib`
+- Look for JAR files in `$HAPI_JAVA_PACKAGE/lib` (required)
 - Search for `hyperd.exe` (Windows) or `hyperd` (Linux/macOS) in multiple locations
 - Configure native library paths for the Hyper API
+- **Fail the build if HAPI_JAVA_PACKAGE is not set or invalid**
 
 ## Building the Project
 
@@ -174,17 +175,23 @@ gradlew.bat run --args="--root . --depth 2 --verbose"  # Windows
    chmod +x gradlew  # Linux/macOS only
    ```
 
-5. **"The Hyper executable does not exist" error**:
-   - Verify HAPI_JAVA_PACKAGE is set and points to correct directory
-   - Check that the Hyper API package contains hyperd.exe or hyperd
-   - Ensure you have the complete Hyper API package, not just JAR files
+5. **"HAPI_JAVA_PACKAGE environment variable must be set" error**:
+   - This error occurs if HAPI_JAVA_PACKAGE is not set or empty
+   - Set the environment variable as described in the setup section above
+   - Restart your terminal/command prompt after setting environment variables
 
-6. **"Could not find hyperd executable in HAPI_JAVA_PACKAGE"**:
+6. **"HAPI_JAVA_PACKAGE directory does not exist" error**:
+   - Verify the path specified in HAPI_JAVA_PACKAGE exists
+   - Check for typos in the path
+   - Ensure you have read access to the directory
+
+7. **"Could not find hyperd executable in HAPI_JAVA_PACKAGE" error**:
    - The build system searches for hyperd in these locations within HAPI_JAVA_PACKAGE:
      - `lib/hyper/hyperd.exe` or `lib/hyper/hyperd`
      - `hyper/hyperd.exe` or `hyper/hyperd`
      - `bin/hyperd.exe` or `bin/hyperd`
    - Verify your Hyper API package structure matches one of these patterns
+   - Ensure you have the complete Hyper API package, not just JAR files
 
 ### Verifying Setup
 
