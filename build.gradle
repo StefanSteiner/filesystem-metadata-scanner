@@ -16,11 +16,13 @@ repositories {
 }
 
 dependencies {
-    // Hyper API dependencies - use HAPI_JAVA_PACKAGE if available, otherwise use local lib
+    // Hyper API dependencies - prioritize HAPI_JAVA_PACKAGE, fallback to local lib
     if (System.getenv('HAPI_JAVA_PACKAGE')) {
         implementation fileTree(dir: "${System.getenv('HAPI_JAVA_PACKAGE')}/lib", include: '*.jar')
+        println "Using Hyper API JARs from HAPI_JAVA_PACKAGE: ${System.getenv('HAPI_JAVA_PACKAGE')}/lib"
     } else {
         implementation fileTree(dir: 'lib', include: '*.jar')
+        println "Using local Hyper API JARs from: lib/"
     }
     
     // Test dependencies
@@ -39,7 +41,15 @@ test {
 // Task to copy JARs - only needed if HAPI_JAVA_PACKAGE is not set
 task copyHyperApiJars(type: Copy) {
     // Skip if HAPI_JAVA_PACKAGE is set (will use JARs directly from there)
-    onlyIf { !System.getenv('HAPI_JAVA_PACKAGE') }
+    onlyIf { 
+        def skipReason = ""
+        if (System.getenv('HAPI_JAVA_PACKAGE')) {
+            skipReason = "HAPI_JAVA_PACKAGE is set, using JARs from: ${System.getenv('HAPI_JAVA_PACKAGE')}/lib"
+            println "Skipping JAR copy: ${skipReason}"
+            return false
+        }
+        return true
+    }
     
     // Try multiple possible source locations
     def possibleSources = [
@@ -58,11 +68,9 @@ task copyHyperApiJars(type: Copy) {
         }
     } else {
         doFirst {
-            if (!System.getenv('HAPI_JAVA_PACKAGE')) {
-                println "Warning: No Hyper API source directory found and HAPI_JAVA_PACKAGE not set."
-                println "Checked: ${possibleSources}"
-                println "Either set HAPI_JAVA_PACKAGE or place JARs manually in lib/ directory."
-            }
+            println "Warning: No Hyper API source directory found and HAPI_JAVA_PACKAGE not set."
+            println "Checked: ${possibleSources}"
+            println "Either set HAPI_JAVA_PACKAGE or place JARs manually in lib/ directory."
         }
     }
 }
