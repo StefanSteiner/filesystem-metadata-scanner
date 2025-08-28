@@ -10,15 +10,15 @@ import java.time.format.DateTimeFormatter;
  * directory samples, file extensions, and more.
  */
 public class ResultsAnalyzer {
-    
+
     private final Connection connection;
     private final TableDefinition tableDefinition;
-    
+
     public ResultsAnalyzer(Connection connection, TableDefinition tableDefinition) {
         this.connection = connection;
         this.tableDefinition = tableDefinition;
     }
-    
+
     /**
      * Displays comprehensive analysis results from the database
      */
@@ -36,7 +36,7 @@ public class ResultsAnalyzer {
         displayFileIdAnalysis();
         displayFileExtensionAnalysis();
     }
-    
+
     /**
      * Displays basic statistics about the scan results
      */
@@ -69,7 +69,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays the largest files found during the scan
      */
@@ -83,7 +83,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays a sample of directories
      */
@@ -97,7 +97,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays recently modified files
      */
@@ -121,7 +121,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays sample hidden files if they exist
      */
@@ -143,7 +143,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays depth distribution of files and directories
      */
@@ -159,7 +159,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays the deepest files in the directory structure
      */
@@ -176,7 +176,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays link analysis (symlinks, mount points, etc.)
      */
@@ -212,7 +212,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays file ID analysis
      */
@@ -248,7 +248,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Displays file extension analysis
      */
@@ -290,7 +290,7 @@ public class ResultsAnalyzer {
             }
         }
     }
-    
+
     /**
      * Demonstrates the difference between Path and Full Path columns
      */
@@ -316,7 +316,7 @@ public class ResultsAnalyzer {
         System.out.println("Note: 'Path' contains the directory without the filename,");
         System.out.println("      'Full Path' contains the complete path including filename.");
     }
-    
+
     /**
      * Formats file size in human-readable format
      *
@@ -329,7 +329,7 @@ public class ResultsAnalyzer {
         String pre = "KMGTPE".charAt(exp - 1) + "";
         return String.format("%.1f %sB", bytes / Math.pow(1024, exp), pre);
     }
-    
+
     /**
      * Truncates a string to the specified length
      */
