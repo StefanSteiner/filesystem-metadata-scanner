@@ -75,25 +75,31 @@ if [ $# -eq 0 ]; then
     echo "  --skip-hidden        Skip hidden files"
     echo "  --verbose            Show detailed results"
     echo "  --query-existing FILE Query existing .hyper file"
-    echo "  --direct             Use direct Java execution (better Ctrl-C handling)"
+    echo "  --gradlerun          Use Gradle execution (default: direct Java execution)"
     echo ""
     echo "Examples:"
     echo "  ./run.sh --root . --depth 2"
     echo "  ./run.sh --root \"/home/\$USER/Documents\" --verbose"
     echo "  ./run.sh --query-existing my_metadata.hyper --verbose"
-    echo "  ./run.sh --root . --depth 8 --direct"
+    echo "  ./run.sh --root . --depth 8
+  ./run.sh --root . --depth 8 --gradlerun"
     echo ""
     echo "Running with default settings..."
     echo ""
     ./gradlew run
 else
-    # Check if --direct flag is present
-    if [[ " $* " == *" --direct "* ]]; then
-        # Remove --direct from arguments
-        ARGS=$(echo "$*" | sed 's/--direct//g' | sed 's/  / /g' | sed 's/^ *//g' | sed 's/ *$//g')
-
-        echo "Running directly with Java (better Ctrl-C handling)..."
+    # Check if --gradlerun flag is present
+    if [[ " $* " == *" --gradlerun "* ]]; then
+        # Remove --gradlerun from arguments
+        ARGS=$(echo "$*" | sed 's/--gradlerun//g' | sed 's/  / /g' | sed 's/^ *//g' | sed 's/ *$//g')
+        
+        echo "Running with Gradle..."
         echo "Arguments: $ARGS"
+        echo ""
+        ./gradlew run --args="$ARGS"
+    else
+        echo "Running directly with Java (better Ctrl-C handling)..."
+        echo "Arguments: $*"
         echo ""
 
         # Set up classpath with all JARs from build and HAPI_JAVA_PACKAGE
@@ -107,11 +113,7 @@ else
         exec $JAVA_CMD -cp "$CLASSPATH" \
             -Dtableau.hyper.libpath="$HYPER_PATH" \
             -Djava.library.path="$HYPER_PATH" \
-            com.example.filesystem.LoadFilesystemMetadata $ARGS
-    else
-        echo "Running with arguments: $*"
-        echo ""
-        ./gradlew run --args="$*"
+            com.example.filesystem.LoadFilesystemMetadata $*
     fi
 fi
 

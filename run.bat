@@ -84,27 +84,38 @@ if "%~1"=="" (
     echo   --skip-hidden        Skip hidden files
     echo   --verbose            Show detailed results
     echo   --query-existing FILE Query existing .hyper file
-    echo   --direct             Use direct Java execution (better Ctrl-C handling)
+    echo   --gradlerun          Use Gradle execution (default: direct Java execution)
     echo.
     echo Examples:
     echo   run.bat --root . --depth 2
     echo   run.bat --root "C:\Users\%USERNAME%\Documents" --verbose
     echo   run.bat --query-existing my_metadata.hyper --verbose
-    echo   run.bat --root . --depth 8 --direct
+    echo   run.bat --root . --depth 8
+    echo   run.bat --root . --depth 8 --gradlerun
     echo.
     echo Running with default settings...
     echo.
     call gradlew.bat run
 ) else (
-    REM Check if --direct flag is present
-    echo %* | find /i "--direct" >nul
+    REM Check if --gradlerun flag is present
+    echo %* | find /i "--gradlerun" >nul
     if %errorlevel% == 0 (
-        REM Remove --direct from arguments
+        REM Remove --gradlerun from arguments
         set "ARGS=%*"
-        call :remove_direct_flag
+        call :remove_gradlerun_flag
         
-        echo Running directly with Java (better Ctrl-C handling)...
+        echo Running with Gradle...
         echo Arguments: !CLEAN_ARGS!
+        echo.
+        
+        if "!CLEAN_ARGS!"=="" (
+            call gradlew.bat run
+        ) else (
+            call gradlew.bat run --args="!CLEAN_ARGS!"
+        )
+    ) else (
+        echo Running directly with Java (better Ctrl-C handling)...
+        echo Arguments: %*
         echo.
         
         REM Set up classpath with all JARs from build and HAPI_JAVA_PACKAGE
@@ -115,15 +126,7 @@ if "%~1"=="" (
         echo Using Hyper API JARs from: %HAPI_JAVA_PACKAGE%\lib
         echo Using Hyper native libraries from: !HYPER_PATH!
         
-        "%JAVA_CMD%" -cp "!CLASSPATH!" -Dtableau.hyper.libpath="!HYPER_PATH!" -Djava.library.path="!HYPER_PATH!" com.example.filesystem.LoadFilesystemMetadata !CLEAN_ARGS!
-    ) else (
-        echo Running with arguments: %*
-        echo.
-        if "%*"=="" (
-            call gradlew.bat run
-        ) else (
-            call gradlew.bat run --args="%*"
-        )
+        "%JAVA_CMD%" -cp "!CLASSPATH!" -Dtableau.hyper.libpath="!HYPER_PATH!" -Djava.library.path="!HYPER_PATH!" com.example.filesystem.LoadFilesystemMetadata %*
     )
 )
 
@@ -132,11 +135,11 @@ echo Done!
 pause
 goto :eof
 
-:remove_direct_flag
-REM Function to remove --direct flag from arguments
+:remove_gradlerun_flag
+REM Function to remove --gradlerun flag from arguments
 set "CLEAN_ARGS="
 for %%i in (%ARGS%) do (
-    if /i not "%%i"=="--direct" (
+    if /i not "%%i"=="--gradlerun" (
         if defined CLEAN_ARGS (
             set "CLEAN_ARGS=!CLEAN_ARGS! %%i"
         ) else (
