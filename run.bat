@@ -108,34 +108,14 @@ if "%~1"=="" (
         echo.
         
         REM Set up classpath with all JARs from build and HAPI_JAVA_PACKAGE
-        set "CLASSPATH=build\classes\java\main"
-        if defined HAPI_JAVA_PACKAGE (
-            if exist "%HAPI_JAVA_PACKAGE%\lib" (
-                for %%f in ("%HAPI_JAVA_PACKAGE%\lib\*.jar") do (
-                    set "CLASSPATH=!CLASSPATH!;%%f"
-                )
-            )
-        )
+        REM Standard layout: %HAPI_JAVA_PACKAGE%\lib\*.jar and %HAPI_JAVA_PACKAGE%\lib\hyper\
+        set "CLASSPATH=build\classes\java\main;%HAPI_JAVA_PACKAGE%\lib\*"
+        set "HYPER_PATH=%HAPI_JAVA_PACKAGE%\lib\hyper"
         
-        REM Set up Hyper native library path
-        set "HYPER_PATH="
-        if defined HAPI_JAVA_PACKAGE (
-            if exist "%HAPI_JAVA_PACKAGE%\lib\hyper" (
-                set "HYPER_PATH=%HAPI_JAVA_PACKAGE%\lib\hyper"
-            ) else if exist "%HAPI_JAVA_PACKAGE%\hyper" (
-                set "HYPER_PATH=%HAPI_JAVA_PACKAGE%\hyper"
-            ) else if exist "%HAPI_JAVA_PACKAGE%\bin" (
-                set "HYPER_PATH=%HAPI_JAVA_PACKAGE%\bin"
-            )
-        )
+        echo Using Hyper API JARs from: %HAPI_JAVA_PACKAGE%\lib
+        echo Using Hyper native libraries from: !HYPER_PATH!
         
-        if defined HYPER_PATH (
-            echo Using Hyper native libraries from: !HYPER_PATH!
-            "%JAVA_CMD%" -cp "!CLASSPATH!" -Dtableau.hyper.libpath="!HYPER_PATH!" -Djava.library.path="!HYPER_PATH!" com.example.filesystem.LoadFilesystemMetadata !CLEAN_ARGS!
-        ) else (
-            echo Warning: Could not find Hyper native libraries
-            "%JAVA_CMD%" -cp "!CLASSPATH!" com.example.filesystem.LoadFilesystemMetadata !CLEAN_ARGS!
-        )
+        "%JAVA_CMD%" -cp "!CLASSPATH!" -Dtableau.hyper.libpath="!HYPER_PATH!" -Djava.library.path="!HYPER_PATH!" com.example.filesystem.LoadFilesystemMetadata !CLEAN_ARGS!
     ) else (
         echo Running with arguments: %*
         echo.

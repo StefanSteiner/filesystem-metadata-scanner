@@ -97,35 +97,17 @@ else
         echo ""
 
         # Set up classpath with all JARs from build and HAPI_JAVA_PACKAGE
-        CLASSPATH="build/classes/java/main"
-        if [ -d "$HAPI_JAVA_PACKAGE/lib" ]; then
-            for jar in "$HAPI_JAVA_PACKAGE/lib"/*.jar; do
-                if [ -f "$jar" ]; then
-                    CLASSPATH="$CLASSPATH:$jar"
-                fi
-            done
-        fi
+        # Standard layout: $HAPI_JAVA_PACKAGE/lib/*.jar and $HAPI_JAVA_PACKAGE/lib/hyper/
+        CLASSPATH="build/classes/java/main:$HAPI_JAVA_PACKAGE/lib/*"
+        HYPER_PATH="$HAPI_JAVA_PACKAGE/lib/hyper"
 
-        # Set up Hyper native library path
-        if [ -d "$HAPI_JAVA_PACKAGE/lib/hyper" ]; then
-            HYPER_PATH="$HAPI_JAVA_PACKAGE/lib/hyper"
-        elif [ -d "$HAPI_JAVA_PACKAGE/hyper" ]; then
-            HYPER_PATH="$HAPI_JAVA_PACKAGE/hyper"
-        elif [ -d "$HAPI_JAVA_PACKAGE/bin" ]; then
-            HYPER_PATH="$HAPI_JAVA_PACKAGE/bin"
-        fi
-
-        if [ -n "$HYPER_PATH" ]; then
-            echo "Using Hyper native libraries from: $HYPER_PATH"
-            exec $JAVA_CMD -cp "$CLASSPATH" \
-                -Dtableau.hyper.libpath="$HYPER_PATH" \
-                -Djava.library.path="$HYPER_PATH" \
-                com.example.filesystem.LoadFilesystemMetadata $ARGS
-        else
-            echo "Warning: Could not find Hyper native libraries"
-            exec $JAVA_CMD -cp "$CLASSPATH" \
-                com.example.filesystem.LoadFilesystemMetadata $ARGS
-        fi
+        echo "Using Hyper API JARs from: $HAPI_JAVA_PACKAGE/lib"
+        echo "Using Hyper native libraries from: $HYPER_PATH"
+        
+        exec $JAVA_CMD -cp "$CLASSPATH" \
+            -Dtableau.hyper.libpath="$HYPER_PATH" \
+            -Djava.library.path="$HYPER_PATH" \
+            com.example.filesystem.LoadFilesystemMetadata $ARGS
     else
         echo "Running with arguments: $*"
         echo ""
