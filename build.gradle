@@ -23,12 +23,12 @@ dependencies {
     if (!hapiPackage) {
         throw new GradleException("HAPI_JAVA_PACKAGE environment variable must be set to the Hyper API Java package directory")
     }
-    
+
     // Use compileOnly for IDE support and implementation for runtime
     compileOnly fileTree(dir: "${hapiPackage}/lib", include: '*.jar')
     implementation fileTree(dir: "${hapiPackage}/lib", include: '*.jar')
     println "Using Hyper API JARs from: ${hapiPackage}/lib"
-    
+
     // Test dependencies
     testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -50,12 +50,12 @@ def setupHyperApiPaths() {
     if (!hapiPackage) {
         throw new GradleException("HAPI_JAVA_PACKAGE environment variable must be set")
     }
-    
+
     def hapiDir = file(hapiPackage)
     if (!hapiDir.exists()) {
         throw new GradleException("HAPI_JAVA_PACKAGE directory does not exist: ${hapiPackage}")
     }
-    
+
     // Look for hyperd.exe in common locations within the Hyper API package
     def possibleHyperdPaths = [
         "${hapiPackage}/lib/hyper/hyperd.exe",                    // Windows typical path
@@ -65,14 +65,14 @@ def setupHyperApiPaths() {
         "${hapiPackage}/bin/hyperd.exe",                         // Another possible Windows path
         "${hapiPackage}/bin/hyperd"                              // Another possible Linux/Mac path
     ]
-    
+
     def hyperdPath = possibleHyperdPaths.find { file(it).exists() }
-    
+
     if (hyperdPath) {
         def hyperdDir = file(hyperdPath).parent
         println "Found hyperd at: ${hyperdPath}"
         println "Setting Hyper native library path to: ${hyperdDir}"
-        
+
         return [
             'tableau.hyper.libpath': hyperdDir,
             'java.library.path': hyperdDir
@@ -98,10 +98,10 @@ task runWithArgs(type: JavaExec) {
     description = 'Run the filesystem metadata scanner with arguments'
     classpath = sourceSets.main.runtimeClasspath
     mainClass = application.mainClass
-    
+
     // Enable console input
     standardInput = System.in
-    
+
     // Setup Hyper API paths
     doFirst {
         def hyperProps = setupHyperApiPaths()
@@ -109,7 +109,7 @@ task runWithArgs(type: JavaExec) {
             systemProperty key, value
         }
     }
-    
+
     // Pass system properties and arguments
     systemProperties = System.properties
     if (project.hasProperty('args')) {
@@ -184,7 +184,7 @@ idea {
     module {
         downloadJavadoc = true
         downloadSources = true
-        
+
         iml {
             withXml {
                 def hapiPackage = System.getenv('HAPI_JAVA_PACKAGE')
@@ -211,7 +211,7 @@ idea {
 task refreshIDE {
     description = 'Refreshes IDE understanding of dependencies'
     group = 'ide'
-    
+
     doLast {
         def hapiPackage = System.getenv('HAPI_JAVA_PACKAGE')
         if (hapiPackage) {
