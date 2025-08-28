@@ -1,6 +1,8 @@
 plugins {
     id 'java'
     id 'application'
+    id 'eclipse'
+    id 'idea'
 }
 
 group = 'com.example.filesystem'
@@ -22,6 +24,8 @@ dependencies {
         throw new GradleException("HAPI_JAVA_PACKAGE environment variable must be set to the Hyper API Java package directory")
     }
     
+    // Use compileOnly for IDE support and implementation for runtime
+    compileOnly fileTree(dir: "${hapiPackage}/lib", include: '*.jar')
     implementation fileTree(dir: "${hapiPackage}/lib", include: '*.jar')
     println "Using Hyper API JARs from: ${hapiPackage}/lib"
     
@@ -154,5 +158,74 @@ Examples:
 
 Note: The build will FAIL if HAPI_JAVA_PACKAGE is not set or invalid.
         """
+    }
+}
+
+// IDE Configuration
+eclipse {
+    classpath {
+        file {
+            whenMerged { classpath ->
+                def hapiPackage = System.getenv('HAPI_JAVA_PACKAGE')
+                if (hapiPackage) {
+                    def hapiDir = file(hapiPackage)
+                    if (hapiDir.exists()) {
+                        fileTree(dir: "${hapiPackage}/lib", include: '*.jar').each { jar ->
+                            classpath.entries.add(new org.gradle.plugins.ide.eclipse.model.Library(fileReference(jar)))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+idea {
+    module {
+        downloadJavadoc = true
+        downloadSources = true
+        
+        iml {
+            withXml {
+                def hapiPackage = System.getenv('HAPI_JAVA_PACKAGE')
+                if (hapiPackage) {
+                    def hapiDir = file(hapiPackage)
+                    if (hapiDir.exists()) {
+                        def moduleElement = it.asNode()
+                        def component = moduleElement.component.find { it.'@name' == 'NewModuleRootManager' }
+                        if (component) {
+                            fileTree(dir: "${hapiPackage}/lib", include: '*.jar').each { jar ->
+                                component.appendNode('orderEntry', [type: 'module-library']).appendNode('library').with {
+                                    appendNode('CLASSES').appendNode('root', [url: "jar://${jar.absolutePath}!/"])
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Task to help IDEs recognize dependencies
+task refreshIDE {
+    description = 'Refreshes IDE understanding of dependencies'
+    group = 'ide'
+    
+    doLast {
+        def hapiPackage = System.getenv('HAPI_JAVA_PACKAGE')
+        if (hapiPackage) {
+            println "Hyper API package location: ${hapiPackage}"
+            println "Available JARs:"
+            fileTree(dir: "${hapiPackage}/lib", include: '*.jar').each { jar ->
+                println "  - ${jar.name}"
+            }
+            println "\nTo fix IDE issues:"
+            println "1. Run: ./gradlew cleanEclipse eclipse cleanIdea idea"
+            println "2. Refresh your IDE project"
+            println "3. For VS Code, reload the window (Cmd+R)"
+        } else {
+            println "HAPI_JAVA_PACKAGE not set. Please set it first."
+        }
     }
 }
