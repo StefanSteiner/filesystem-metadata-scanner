@@ -224,6 +224,8 @@ task refreshIDE {
             println "1. Run: ./gradlew cleanEclipse eclipse cleanIdea idea"
             println "2. Refresh your IDE project"
             println "3. For VS Code, reload the window (Cmd+R)"
+            println "4. If you see package name errors, ensure src/main/java is set as source root"
+            println "5. In VS Code: Cmd+Shift+P -> 'Java: Reload projects'"
         } else {
             println "HAPI_JAVA_PACKAGE not set. Please set it first."
         }

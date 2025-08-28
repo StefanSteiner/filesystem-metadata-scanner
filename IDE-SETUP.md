@@ -9,7 +9,8 @@ IDEs may show import errors for Tableau Hyper API classes because the JARs are l
 1. Set environment variable: `export HAPI_JAVA_PACKAGE=/path/to/hyper-api-java`
 2. Run: `./gradlew cleanEclipse eclipse cleanIdea idea`
 3. Reload VS Code window: `Cmd+Shift+P` → "Developer: Reload Window"
-4. Or use the generated `.vscode/settings.json` configuration
+4. If you see package errors: `Cmd+Shift+P` → "Java: Reload Projects"
+5. Ensure `src/main/java` is recognized as source root in the Java Project view
 
 ### For IntelliJ IDEA
 1. Set environment variable: `export HAPI_JAVA_PACKAGE=/path/to/hyper-api-java`
@@ -38,8 +39,23 @@ export HAPI_JAVA_PACKAGE=/path/to/hyper-api-java
 ./run.sh --root . --depth 2
 ```
 
+## Common Issues
+
+### Package Declaration Errors
+If you see errors like "package does not match expected package src.main.java.com.example.filesystem":
+1. This means the IDE doesn't recognize `src/main/java` as the source root
+2. Run: `./gradlew cleanEclipse eclipse cleanIdea idea` 
+3. In VS Code: `Cmd+Shift+P` → "Java: Reload Projects"
+4. Check the Java Project view to ensure proper source folder recognition
+
+### Import Resolution Errors  
+If you see "import cannot be resolved" for Hyper API classes:
+1. This means the IDE doesn't see the dynamically loaded JARs
+2. Use the solutions above to generate proper IDE project files
+3. The code compiles and runs correctly regardless of these warnings
+
 ## Note
-The "import errors" are false positives. The application builds and runs correctly because:
+These are false positive IDE warnings. The application builds and runs correctly because:
 1. Gradle uses `implementation fileTree()` to load the JARs at runtime
 2. The actual Hyper API classes are available during compilation and execution
 3. IDEs sometimes can't resolve dynamically loaded dependencies until properly configured
