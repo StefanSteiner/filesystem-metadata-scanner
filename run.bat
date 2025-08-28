@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 REM Filesystem Metadata Scanner Launcher
 REM This script attempts to find Java and run the scanner
 
@@ -83,25 +84,84 @@ if "%~1"=="" (
     echo   --skip-hidden        Skip hidden files
     echo   --verbose            Show detailed results
     echo   --query-existing FILE Query existing .hyper file
+    echo   --direct             Use direct Java execution (better Ctrl-C handling)
     echo.
     echo Examples:
     echo   run.bat --root . --depth 2
     echo   run.bat --root "C:\Users\%USERNAME%\Documents" --verbose
     echo   run.bat --query-existing my_metadata.hyper --verbose
+    echo   run.bat --root . --depth 8 --direct
     echo.
     echo Running with default settings...
     echo.
     call gradlew.bat run
 ) else (
-    echo Running with arguments: %*
-    echo.
-    if "%*"=="" (
-        call gradlew.bat run
+    REM Check if --direct flag is present
+    echo %* | find /i "--direct" >nul
+    if %errorlevel% == 0 (
+        REM Remove --direct from arguments
+        set "ARGS=%*"
+        call :remove_direct_flag
+        
+        echo Running directly with Java (better Ctrl-C handling)...
+        echo Arguments: !CLEAN_ARGS!
+        echo.
+        
+        REM Set up classpath with all JARs from build and HAPI_JAVA_PACKAGE
+        set "CLASSPATH=build\classes\java\main"
+        if defined HAPI_JAVA_PACKAGE (
+            if exist "%HAPI_JAVA_PACKAGE%\lib" (
+                for %%f in ("%HAPI_JAVA_PACKAGE%\lib\*.jar") do (
+                    set "CLASSPATH=!CLASSPATH!;%%f"
+                )
+            )
+        )
+        
+        REM Set up Hyper native library path
+        set "HYPER_PATH="
+        if defined HAPI_JAVA_PACKAGE (
+            if exist "%HAPI_JAVA_PACKAGE%\lib\hyper" (
+                set "HYPER_PATH=%HAPI_JAVA_PACKAGE%\lib\hyper"
+            ) else if exist "%HAPI_JAVA_PACKAGE%\hyper" (
+                set "HYPER_PATH=%HAPI_JAVA_PACKAGE%\hyper"
+            ) else if exist "%HAPI_JAVA_PACKAGE%\bin" (
+                set "HYPER_PATH=%HAPI_JAVA_PACKAGE%\bin"
+            )
+        )
+        
+        if defined HYPER_PATH (
+            echo Using Hyper native libraries from: !HYPER_PATH!
+            "%JAVA_CMD%" -cp "!CLASSPATH!" -Dtableau.hyper.libpath="!HYPER_PATH!" -Djava.library.path="!HYPER_PATH!" com.example.filesystem.LoadFilesystemMetadata !CLEAN_ARGS!
+        ) else (
+            echo Warning: Could not find Hyper native libraries
+            "%JAVA_CMD%" -cp "!CLASSPATH!" com.example.filesystem.LoadFilesystemMetadata !CLEAN_ARGS!
+        )
     ) else (
-        call gradlew.bat run --args="%*"
+        echo Running with arguments: %*
+        echo.
+        if "%*"=="" (
+            call gradlew.bat run
+        ) else (
+            call gradlew.bat run --args="%*"
+        )
     )
 )
 
 echo.
 echo Done!
 pause
+goto :eof
+
+:remove_direct_flag
+REM Function to remove --direct flag from arguments
+set "CLEAN_ARGS="
+for %%i in (%ARGS%) do (
+    if /i not "%%i"=="--direct" (
+        if defined CLEAN_ARGS (
+            set "CLEAN_ARGS=!CLEAN_ARGS! %%i"
+        ) else (
+            set "CLEAN_ARGS=%%i"
+        )
+    )
+)
+goto :eof
