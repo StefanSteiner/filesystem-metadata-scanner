@@ -150,7 +150,7 @@ public class LoadFilesystemMetadata {
             }
             metadataDatabasePath = Paths.get(hyperFilePath);
         } else {
-            metadataDatabasePath = Paths.get(getWorkingDirectory(), generateDatabaseFilename(directoryPath));
+            metadataDatabasePath = Paths.get(getWorkingDirectory(), FilenameGenerator.generateDatabaseFilename(directoryPath));
         }
 
         // Optional process parameters
@@ -184,10 +184,9 @@ public class LoadFilesystemMetadata {
 
                     // Query and display results from existing database only if verbose
                     if (verbose) {
-                        displaySampleResults(connection);
-
-                        // Show the difference between Path and Full File Path columns
-                        demonstratePathColumns(connection);
+                        ResultsAnalyzer analyzer = new ResultsAnalyzer(connection, FILESYSTEM_METADATA_TABLE);
+                        analyzer.displaySampleResults();
+                        analyzer.demonstratePathColumns();
                     } else {
                         System.out.println("Database queried successfully. Use --verbose to see detailed analysis results.");
                     }
@@ -289,27 +288,15 @@ public class LoadFilesystemMetadata {
 
         System.out.println("Starting filesystem scan...");
 
-        // Create log file for access errors
-        String logFilename = generateLogFilename(directoryPath.toString());
-        Path logFilePath = Paths.get(getWorkingDirectory(), logFilename);
-        final PrintWriter[] accessLogWriterArray = new PrintWriter[1]; // Use array to work around effectively final requirement
-
+        // Create log writer for access errors (using try-with-resources pattern)
+        AccessLogWriter logWriter = null;
         try {
-            // Create log file (truncate if exists)
-            accessLogWriterArray[0] = new PrintWriter(new FileWriter(logFilePath.toFile(), false));
-            accessLogWriterArray[0].println("Filesystem scan access errors and skipped files log");
-            accessLogWriterArray[0].println("Scan started at: " + java.time.LocalDateTime.now());
-            accessLogWriterArray[0].println("Directory: " + directoryPath.toAbsolutePath());
-            accessLogWriterArray[0].println("Max depth: " + maxDepth);
-            accessLogWriterArray[0].println("Skip hidden: " + skipHidden);
-            accessLogWriterArray[0].println("===============================================");
-            accessLogWriterArray[0].flush();
-
-            System.out.println("Access errors and skipped files will be logged to: " + logFilePath.toAbsolutePath());
+            logWriter = new AccessLogWriter(directoryPath, maxDepth, skipHidden);
         } catch (IOException e) {
-            System.err.println("Warning: Could not create access log file: " + e.getMessage());
-            System.err.println("Access errors and skipped files will be printed to console instead.");
+            // Fallback to console logging
+            logWriter = new AccessLogWriter();
         }
+        final AccessLogWriter accessLogWriter = logWriter;
 
         // Setup progress reporting (always enabled during scanning)
         ScheduledExecutorService progressReporter = Executors.newScheduledThreadPool(1);
@@ -381,12 +368,7 @@ public class LoadFilesystemMetadata {
                                     skipMessage = "Skipping directory: " + dir;
                                 }
 
-                                if (accessLogWriterArray[0] != null) {
-                                    accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + skipMessage);
-                                    accessLogWriterArray[0].flush();
-                                } else {
-                                    System.out.println("WARNING: " + skipMessage);
-                                }
+                                accessLogWriter.logError(skipMessage);
 
                                 // Still record the directory in the database, but don't traverse into it
                                 insertFileMetadata(inserter, dir, depth);
@@ -401,12 +383,7 @@ public class LoadFilesystemMetadata {
                             directoryCount.incrementAndGet();
                         } catch (IOException | SecurityException e) {
                             String errorMessage = "Skipping directory due to access restrictions: " + dir.getFileName() + " - " + e.getMessage();
-                            if (accessLogWriterArray[0] != null) {
-                                accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + errorMessage);
-                                accessLogWriterArray[0].flush();
-                            } else {
-                                System.err.println(errorMessage);
-                            }
+                            accessLogWriter.logError(errorMessage);
                         }
                         return FileVisitResult.CONTINUE;
                     }
@@ -437,12 +414,7 @@ public class LoadFilesystemMetadata {
                             // Check if it's a symbolic link (files can be symlinks too)
                             if (isSymbolicLink(file)) {
                                 String skipMessage = "Skipping symbolic link file: " + file;
-                                if (accessLogWriterArray[0] != null) {
-                                    accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + skipMessage);
-                                    accessLogWriterArray[0].flush();
-                                } else {
-                                    System.out.println("WARNING: " + skipMessage);
-                                }
+                                accessLogWriter.logError(skipMessage);
                                 // Still record the symlink in the database
                                 insertFileMetadata(inserter, file, depth);
                                 fileCount.incrementAndGet();
@@ -453,12 +425,7 @@ public class LoadFilesystemMetadata {
                             fileCount.incrementAndGet();
                         } catch (IOException | SecurityException e) {
                             String errorMessage = "Skipping file due to access restrictions: " + file.getFileName() + " - " + e.getMessage();
-                            if (accessLogWriterArray[0] != null) {
-                                accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + errorMessage);
-                                accessLogWriterArray[0].flush();
-                            } else {
-                                System.err.println(errorMessage);
-                            }
+                            accessLogWriter.logError(errorMessage);
                         }
                         return FileVisitResult.CONTINUE;
                     }
@@ -466,12 +433,7 @@ public class LoadFilesystemMetadata {
                     @Override
                     public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
                         String errorMessage = "Access denied to: " + file.getFileName() + " - " + exc.getMessage();
-                        if (accessLogWriterArray[0] != null) {
-                            accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + errorMessage);
-                            accessLogWriterArray[0].flush();
-                        } else {
-                            System.err.println(errorMessage);
-                        }
+                        accessLogWriter.logError(errorMessage);
                         return FileVisitResult.CONTINUE;
                     }
 
@@ -533,10 +495,9 @@ public class LoadFilesystemMetadata {
 
             // Query and display some results only if verbose
             if (verbose) {
-                displaySampleResults(connection);
-
-                // Show the difference between Path and Full File Path columns
-                demonstratePathColumns(connection);
+                ResultsAnalyzer analyzer = new ResultsAnalyzer(connection, FILESYSTEM_METADATA_TABLE);
+                analyzer.displaySampleResults();
+                analyzer.demonstratePathColumns();
             } else {
                 if (shouldStop) {
                     System.out.println("Filesystem scanning interrupted but partial results saved successfully. Use --verbose to see detailed analysis results.");
@@ -559,14 +520,16 @@ public class LoadFilesystemMetadata {
             processingComplete = true;
 
             // Close the access log writer
-            if (accessLogWriterArray[0] != null) {
-                accessLogWriterArray[0].println("===============================================");
+            try {
+                accessLogWriter.logError("===============================================");
                 if (shouldStop) {
-                    accessLogWriterArray[0].println("Scan interrupted by user (Ctrl-C) at: " + java.time.LocalDateTime.now());
+                    accessLogWriter.logError("Scan interrupted by user (Ctrl-C) at: " + java.time.LocalDateTime.now());
                 } else {
-                    accessLogWriterArray[0].println("Scan completed at: " + java.time.LocalDateTime.now());
+                    accessLogWriter.logError("Scan completed at: " + java.time.LocalDateTime.now());
                 }
-                accessLogWriterArray[0].close();
+                accessLogWriter.close();
+            } catch (Exception e) {
+                System.err.println("Warning: Error closing access log writer: " + e.getMessage());
             }
 
             // Shutdown progress reporter
@@ -949,10 +912,9 @@ public class LoadFilesystemMetadata {
     }
 
     /**
-     * Displays sample results from the database
-     *
-     * @param connection The database connection
+     * @deprecated Use ResultsAnalyzer.displaySampleResults() instead
      */
+    @Deprecated
     private static void displaySampleResults(Connection connection) {
         System.out.println("\n=== SAMPLE RESULTS ===");
 
@@ -1219,15 +1181,6 @@ public class LoadFilesystemMetadata {
     }
 
     /**
-     * Returns the current working directory
-     *
-     * @return The inferred working directory
-     */
-    private static String getWorkingDirectory() {
-        return System.getProperty("user.dir");
-    }
-
-    /**
      * Generates a filename for the Hyper file based on the directory path.
      * Handles special cases like root directory, special characters, and long paths.
      *
@@ -1329,5 +1282,14 @@ public class LoadFilesystemMetadata {
         }
 
         return fileName + "_access_errors.log";
+    }
+
+    /**
+     * Returns the current working directory
+     *
+     * @return The inferred working directory
+     */
+    private static String getWorkingDirectory() {
+        return System.getProperty("user.dir");
     }
 }
