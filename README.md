@@ -15,7 +15,7 @@ A Java application that scans filesystem directories and stores comprehensive me
 ## Prerequisites
 
 - **Java 11 or higher**
-- **Tableau Hyper API JARs** (included in `lib/` directory)
+- **Tableau Hyper API JARs** (via `HAPI_JAVA_PACKAGE` environment variable)
 
 ## Quick Start
 
@@ -127,6 +127,7 @@ The verbose mode (`--verbose`) provides detailed analysis including:
 1. **Permission Errors**: Check the access log file for detailed information about inaccessible files
 2. **Large Scans**: Use lower depth values or enable `--skip-hidden` for better performance
 3. **Memory Issues**: For very large directories, consider breaking the scan into smaller chunks
+4. **Hyper API Issues**: Ensure `HAPI_JAVA_PACKAGE` is set and points to a valid Hyper API installation
 
 ### Error Logs
 

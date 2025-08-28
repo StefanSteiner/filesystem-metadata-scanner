@@ -75,19 +75,62 @@ if [ $# -eq 0 ]; then
     echo "  --skip-hidden        Skip hidden files"
     echo "  --verbose            Show detailed results"
     echo "  --query-existing FILE Query existing .hyper file"
+    echo "  --direct             Use direct Java execution (better Ctrl-C handling)"
     echo ""
     echo "Examples:"
     echo "  ./run.sh --root . --depth 2"
     echo "  ./run.sh --root \"/home/\$USER/Documents\" --verbose"
     echo "  ./run.sh --query-existing my_metadata.hyper --verbose"
+    echo "  ./run.sh --root . --depth 8 --direct"
     echo ""
     echo "Running with default settings..."
     echo ""
     ./gradlew run
 else
-    echo "Running with arguments: $*"
-    echo ""
-    ./gradlew run --args="$*"
+    # Check if --direct flag is present
+    if [[ " $* " == *" --direct "* ]]; then
+        # Remove --direct from arguments
+        ARGS=$(echo "$*" | sed 's/--direct//g' | sed 's/  / /g' | sed 's/^ *//g' | sed 's/ *$//g')
+
+        echo "Running directly with Java (better Ctrl-C handling)..."
+        echo "Arguments: $ARGS"
+        echo ""
+
+        # Set up classpath with all JARs from build and HAPI_JAVA_PACKAGE
+        CLASSPATH="build/classes/java/main"
+        if [ -d "$HAPI_JAVA_PACKAGE/lib" ]; then
+            for jar in "$HAPI_JAVA_PACKAGE/lib"/*.jar; do
+                if [ -f "$jar" ]; then
+                    CLASSPATH="$CLASSPATH:$jar"
+                fi
+            done
+        fi
+
+        # Set up Hyper native library path
+        if [ -d "$HAPI_JAVA_PACKAGE/lib/hyper" ]; then
+            HYPER_PATH="$HAPI_JAVA_PACKAGE/lib/hyper"
+        elif [ -d "$HAPI_JAVA_PACKAGE/hyper" ]; then
+            HYPER_PATH="$HAPI_JAVA_PACKAGE/hyper"
+        elif [ -d "$HAPI_JAVA_PACKAGE/bin" ]; then
+            HYPER_PATH="$HAPI_JAVA_PACKAGE/bin"
+        fi
+
+        if [ -n "$HYPER_PATH" ]; then
+            echo "Using Hyper native libraries from: $HYPER_PATH"
+            exec $JAVA_CMD -cp "$CLASSPATH" \
+                -Dtableau.hyper.libpath="$HYPER_PATH" \
+                -Djava.library.path="$HYPER_PATH" \
+                com.example.filesystem.LoadFilesystemMetadata $ARGS
+        else
+            echo "Warning: Could not find Hyper native libraries"
+            exec $JAVA_CMD -cp "$CLASSPATH" \
+                com.example.filesystem.LoadFilesystemMetadata $ARGS
+        fi
+    else
+        echo "Running with arguments: $*"
+        echo ""
+        ./gradlew run --args="$*"
+    fi
 fi
 
 echo ""

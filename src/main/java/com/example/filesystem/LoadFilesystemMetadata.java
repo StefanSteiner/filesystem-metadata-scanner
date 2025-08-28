@@ -35,6 +35,12 @@ public class LoadFilesystemMetadata {
     private static final boolean IS_WINDOWS = System.getProperty("os.name").toLowerCase().contains("windows");
 
     /**
+     * Flag to indicate if the application should stop due to user interruption (Ctrl-C)
+     */
+    private static volatile boolean shouldStop = false;
+    private static volatile boolean processingComplete = false;
+
+    /**
      * The filesystem metadata table
      */
     private static TableDefinition FILESYSTEM_METADATA_TABLE = new TableDefinition(
@@ -77,7 +83,7 @@ public class LoadFilesystemMetadata {
         // Parse arguments
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
-            
+
             if (arg.equals("--root")) {
                 if (i + 1 < args.length) {
                     directoryPath = args[++i];
@@ -159,7 +165,7 @@ public class LoadFilesystemMetadata {
                 System.err.println("Please check the file path and try again.");
                 System.exit(1);
             }
-            
+
             System.out.println("Querying existing database: " + metadataDatabasePath.toAbsolutePath());
             System.out.println("Verbose mode: " + verbose);
             System.out.println();
@@ -179,7 +185,7 @@ public class LoadFilesystemMetadata {
                     // Query and display results from existing database only if verbose
                     if (verbose) {
                         displaySampleResults(connection);
-                        
+
                         // Show the difference between Path and Full File Path columns
                         demonstratePathColumns(connection);
                     } else {
@@ -191,6 +197,36 @@ public class LoadFilesystemMetadata {
             System.out.println("The Hyper process has been shut down");
             return; // Exit early, don't do filesystem scanning
         }
+
+        // Install signal handler for graceful Ctrl-C handling
+        Thread mainThread = Thread.currentThread();
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (!shouldStop && !processingComplete) {
+                shouldStop = true;
+                System.out.println();
+                System.out.println("=== INTERRUPTED BY USER (Ctrl-C) ===");
+                System.out.println("Stopping filesystem scan gracefully...");
+                System.out.println("Please wait for current operations to complete and results to be displayed.");
+                System.out.println();
+
+                // Interrupt the main thread to speed up the process
+                mainThread.interrupt();
+
+                // Wait for processing to complete, but with a timeout
+                long startWait = System.currentTimeMillis();
+                while (!processingComplete && (System.currentTimeMillis() - startWait) < 15000) {
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
+
+                if (!processingComplete) {
+                    System.out.println("Timeout waiting for graceful shutdown, partial results may be incomplete.");
+                }
+            }
+        }));
 
         // Starts the Hyper Process with telemetry enabled
         try (HyperProcess process = new HyperProcess(Telemetry.SEND_USAGE_DATA_TO_TABLEAU, "filesystem_metadata_example", processParameters)) {
@@ -228,26 +264,9 @@ public class LoadFilesystemMetadata {
                 long startTime = System.nanoTime();
                 long totalFiles = walkDirectoryAndInsertMetadata(connection, directoryToScan, maxDepth, skipHidden, verbose);
                 long endTime = System.nanoTime();
-                
-                // Calculate timing metrics
-                double durationSeconds = (endTime - startTime) / 1_000_000_000.0;
-                double filesPerSecond = totalFiles / durationSeconds;
-                
-                System.out.println("=== SCANNING PERFORMANCE ===");
-                System.out.println("Total files and directories processed: " + totalFiles);
-                System.out.printf("Scanning completed in: %.2f seconds%n", durationSeconds);
-                System.out.printf("Processing rate: %.1f items/second%n", filesPerSecond);
-                System.out.println();
 
-                // Query and display some results only if verbose
-                if (verbose) {
-                    displaySampleResults(connection);
-                    
-                    // Show the difference between Path and Full File Path columns
-                    demonstratePathColumns(connection);
-                } else {
-                    System.out.println("Filesystem scanning completed successfully. Use --verbose to see detailed analysis results.");
-                }
+                // The performance metrics and analysis results are now displayed
+                // within walkDirectoryAndInsertMetadata method
             }
             System.out.println("The connection to the Hyper file has been closed");
         }
@@ -269,12 +288,12 @@ public class LoadFilesystemMetadata {
         AtomicLong directoryCount = new AtomicLong(0);
 
         System.out.println("Starting filesystem scan...");
-        
+
         // Create log file for access errors
         String logFilename = generateLogFilename(directoryPath.toString());
         Path logFilePath = Paths.get(getWorkingDirectory(), logFilename);
         final PrintWriter[] accessLogWriterArray = new PrintWriter[1]; // Use array to work around effectively final requirement
-        
+
         try {
             // Create log file (truncate if exists)
             accessLogWriterArray[0] = new PrintWriter(new FileWriter(logFilePath.toFile(), false));
@@ -285,173 +304,271 @@ public class LoadFilesystemMetadata {
             accessLogWriterArray[0].println("Skip hidden: " + skipHidden);
             accessLogWriterArray[0].println("===============================================");
             accessLogWriterArray[0].flush();
-            
+
             System.out.println("Access errors and skipped files will be logged to: " + logFilePath.toAbsolutePath());
         } catch (IOException e) {
             System.err.println("Warning: Could not create access log file: " + e.getMessage());
             System.err.println("Access errors and skipped files will be printed to console instead.");
         }
-        
+
         // Setup progress reporting (always enabled during scanning)
         ScheduledExecutorService progressReporter = Executors.newScheduledThreadPool(1);
         progressReporter.scheduleAtFixedRate(() -> {
+            if (shouldStop) {
+                progressReporter.shutdown();
+                return;
+            }
             long totalItems = fileCount.get();
             long totalDirs = directoryCount.get();
             long totalFiles = totalItems - totalDirs;
             System.out.println("Progress: " + totalItems + " items processed (" + totalDirs + " dirs, " + totalFiles + " files)...");
+
+            // Check for interruption more frequently during progress updates
+            if (Thread.currentThread().isInterrupted()) {
+                shouldStop = true;
+                progressReporter.shutdown();
+            }
         }, 5, 5, TimeUnit.SECONDS);
-        
-        try (Inserter inserter = new Inserter(connection, FILESYSTEM_METADATA_TABLE)) {
-            long scanStartTime = System.nanoTime();
-            
+
+        Inserter inserter = new Inserter(connection, FILESYSTEM_METADATA_TABLE);
+        long scanStartTime = System.nanoTime();
+
+        try {
             // Use a custom FileVisitor that can handle permission errors gracefully
             Files.walkFileTree(directoryPath, new SimpleFileVisitor<Path>() {
-                private int depth = -1; // Start at -1 so root directory is depth 0
+                    private int depth = -1; // Start at -1 so root directory is depth 0
 
-                @Override
-                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                    depth++;
-                    
-                    if (depth >= maxDepth) {
-                        depth--; // Decrement since we're not processing this directory
-                        return FileVisitResult.SKIP_SUBTREE;
-                    }
-                    
-                    try {
-                        boolean isHidden = isHiddenFile(dir);
-                        
-                        // Skip hidden directories if requested
-                        if (skipHidden && isHidden) {
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                        // Check for user interruption (Ctrl-C) or thread interruption
+                        if (shouldStop || Thread.currentThread().isInterrupted()) {
+                            if (!shouldStop) {
+                                shouldStop = true;
+                                System.out.println();
+                                System.out.println("=== INTERRUPTED BY USER (Ctrl-C) ===");
+                                System.out.println("Stopping filesystem scan gracefully...");
+                                System.out.println("Please wait for current operations to complete and results to be displayed.");
+                                System.out.println();
+                            }
+                            return FileVisitResult.TERMINATE;
+                        }
+
+                        depth++;
+
+                        if (depth >= maxDepth) {
                             depth--; // Decrement since we're not processing this directory
                             return FileVisitResult.SKIP_SUBTREE;
                         }
-                        
-                        // Check if we should traverse this directory (not a symlink, mount point, or junction)
-                        if (!shouldTraverseDirectory(dir)) {
-                            // Log the reason for skipping
-                            String skipMessage;
-                            if (isSymbolicLink(dir)) {
-                                skipMessage = "Skipping symbolic link: " + dir;
-                            } else if (isMountPointOrJunction(dir)) {
-                                skipMessage = "Skipping mount point/junction: " + dir;
-                            } else {
-                                skipMessage = "Skipping directory: " + dir;
+
+                        try {
+                            boolean isHidden = isHiddenFile(dir);
+
+                            // Skip hidden directories if requested
+                            if (skipHidden && isHidden) {
+                                depth--; // Decrement since we're not processing this directory
+                                return FileVisitResult.SKIP_SUBTREE;
                             }
-                            
-                            if (accessLogWriterArray[0] != null) {
-                                accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + skipMessage);
-                                accessLogWriterArray[0].flush();
-                            } else {
-                                System.out.println("WARNING: " + skipMessage);
+
+                            // Check if we should traverse this directory (not a symlink, mount point, or junction)
+                            if (!shouldTraverseDirectory(dir)) {
+                                // Log the reason for skipping
+                                String skipMessage;
+                                if (isSymbolicLink(dir)) {
+                                    skipMessage = "Skipping symbolic link: " + dir;
+                                } else if (isMountPointOrJunction(dir)) {
+                                    skipMessage = "Skipping mount point/junction: " + dir;
+                                } else {
+                                    skipMessage = "Skipping directory: " + dir;
+                                }
+
+                                if (accessLogWriterArray[0] != null) {
+                                    accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + skipMessage);
+                                    accessLogWriterArray[0].flush();
+                                } else {
+                                    System.out.println("WARNING: " + skipMessage);
+                                }
+
+                                // Still record the directory in the database, but don't traverse into it
+                                insertFileMetadata(inserter, dir, depth);
+                                fileCount.incrementAndGet();
+                                directoryCount.incrementAndGet();
+                                depth--; // Decrement since we're not processing this directory's contents
+                                return FileVisitResult.SKIP_SUBTREE;
                             }
-                            
-                            // Still record the directory in the database, but don't traverse into it
+
                             insertFileMetadata(inserter, dir, depth);
                             fileCount.incrementAndGet();
                             directoryCount.incrementAndGet();
-                            depth--; // Decrement since we're not processing this directory's contents
-                            return FileVisitResult.SKIP_SUBTREE;
-                        }
-                        
-                        insertFileMetadata(inserter, dir, depth);
-                        fileCount.incrementAndGet();
-                        directoryCount.incrementAndGet();
-                    } catch (IOException | SecurityException e) {
-                        String errorMessage = "Skipping directory due to access restrictions: " + dir.getFileName() + " - " + e.getMessage();
-                        if (accessLogWriterArray[0] != null) {
-                            accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + errorMessage);
-                            accessLogWriterArray[0].flush();
-                        } else {
-                            System.err.println(errorMessage);
-                        }
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    try {
-                        boolean isHidden = isHiddenFile(file);
-                        
-                        // Skip hidden files if requested
-                        if (skipHidden && isHidden) {
-                            return FileVisitResult.CONTINUE;
-                        }
-                        
-                        // Check if it's a symbolic link (files can be symlinks too)
-                        if (isSymbolicLink(file)) {
-                            String skipMessage = "Skipping symbolic link file: " + file;
+                        } catch (IOException | SecurityException e) {
+                            String errorMessage = "Skipping directory due to access restrictions: " + dir.getFileName() + " - " + e.getMessage();
                             if (accessLogWriterArray[0] != null) {
-                                accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + skipMessage);
+                                accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + errorMessage);
                                 accessLogWriterArray[0].flush();
                             } else {
-                                System.out.println("WARNING: " + skipMessage);
+                                System.err.println(errorMessage);
                             }
-                            // Still record the symlink in the database
+                        }
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                        // Check for user interruption (Ctrl-C) or thread interruption
+                        if (shouldStop || Thread.currentThread().isInterrupted()) {
+                            if (!shouldStop) {
+                                shouldStop = true;
+                                System.out.println();
+                                System.out.println("=== INTERRUPTED BY USER (Ctrl-C) ===");
+                                System.out.println("Stopping filesystem scan gracefully...");
+                                System.out.println("Please wait for current operations to complete and results to be displayed.");
+                                System.out.println();
+                            }
+                            return FileVisitResult.TERMINATE;
+                        }
+
+                        try {
+                            boolean isHidden = isHiddenFile(file);
+
+                            // Skip hidden files if requested
+                            if (skipHidden && isHidden) {
+                                return FileVisitResult.CONTINUE;
+                            }
+
+                            // Check if it's a symbolic link (files can be symlinks too)
+                            if (isSymbolicLink(file)) {
+                                String skipMessage = "Skipping symbolic link file: " + file;
+                                if (accessLogWriterArray[0] != null) {
+                                    accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + skipMessage);
+                                    accessLogWriterArray[0].flush();
+                                } else {
+                                    System.out.println("WARNING: " + skipMessage);
+                                }
+                                // Still record the symlink in the database
+                                insertFileMetadata(inserter, file, depth);
+                                fileCount.incrementAndGet();
+                                return FileVisitResult.CONTINUE;
+                            }
+
                             insertFileMetadata(inserter, file, depth);
                             fileCount.incrementAndGet();
-                            return FileVisitResult.CONTINUE;
+                        } catch (IOException | SecurityException e) {
+                            String errorMessage = "Skipping file due to access restrictions: " + file.getFileName() + " - " + e.getMessage();
+                            if (accessLogWriterArray[0] != null) {
+                                accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + errorMessage);
+                                accessLogWriterArray[0].flush();
+                            } else {
+                                System.err.println(errorMessage);
+                            }
                         }
-                        
-                        insertFileMetadata(inserter, file, depth);
-                        fileCount.incrementAndGet();
-                    } catch (IOException | SecurityException e) {
-                        String errorMessage = "Skipping file due to access restrictions: " + file.getFileName() + " - " + e.getMessage();
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                        String errorMessage = "Access denied to: " + file.getFileName() + " - " + exc.getMessage();
                         if (accessLogWriterArray[0] != null) {
                             accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + errorMessage);
                             accessLogWriterArray[0].flush();
                         } else {
                             System.err.println(errorMessage);
                         }
+                        return FileVisitResult.CONTINUE;
                     }
-                    return FileVisitResult.CONTINUE;
-                }
 
-                @Override
-                public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
-                    String errorMessage = "Access denied to: " + file.getFileName() + " - " + exc.getMessage();
-                    if (accessLogWriterArray[0] != null) {
-                        accessLogWriterArray[0].println(java.time.LocalDateTime.now() + " - " + errorMessage);
-                        accessLogWriterArray[0].flush();
-                    } else {
-                        System.err.println(errorMessage);
+                    @Override
+                    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                        depth--;
+                        return FileVisitResult.CONTINUE;
                     }
-                    return FileVisitResult.CONTINUE;
-                }
+                });
 
-                @Override
-                public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                    depth--;
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-            
-            long scanEndTime = System.nanoTime();
-            double scanDurationSeconds = (scanEndTime - scanStartTime) / 1_000_000_000.0;
-            
-            System.out.println("Filesystem scan completed, inserting data into database...");
-            
+        } catch (IOException e) {
+            if (shouldStop) {
+                System.out.println("Filesystem scan interrupted during traversal");
+            } else {
+                System.err.println("Error walking directory: " + e.getMessage());
+            }
+        }
+
+        // Immediately stop progress reporting when file scanning ends
+        progressReporter.shutdown();
+
+        // Always perform database insertion and show results, even if interrupted
+        long scanEndTime = System.nanoTime();
+        double scanDurationSeconds = (scanEndTime - scanStartTime) / 1_000_000_000.0;
+
+        try {
+            if (shouldStop) {
+                System.out.println("Filesystem scan interrupted by user, inserting partial data into database...");
+            } else {
+                System.out.println("Filesystem scan completed, inserting data into database...");
+            }
+
             long insertStartTime = System.nanoTime();
             inserter.execute();
             long insertEndTime = System.nanoTime();
             double insertDurationSeconds = (insertEndTime - insertStartTime) / 1_000_000_000.0;
-            
-            System.out.printf("Filesystem scan time: %.2f seconds (%.1f items/sec)%n", 
+
+            System.out.printf("Filesystem scan time: %.2f seconds (%.1f items/sec)%n",
                             scanDurationSeconds, fileCount.get() / scanDurationSeconds);
             System.out.printf("Database insertion time: %.2f seconds%n", insertDurationSeconds);
-            System.out.printf("Found %d directories and %d files%n", 
-                            directoryCount.get(), fileCount.get() - directoryCount.get());
-            
-        } catch (IOException e) {
-            System.err.println("Error walking directory: " + e.getMessage());
+            System.out.printf("Found %d directories and %d files%s%n",
+                            directoryCount.get(), fileCount.get() - directoryCount.get(),
+                            shouldStop ? " (partial scan due to interruption)" : "");
+
+            // Show performance metrics
+            long totalFiles = fileCount.get();
+            long endTime = System.nanoTime();
+            long startTime = scanStartTime;
+            double durationSeconds = (endTime - startTime) / 1_000_000_000.0;
+            double filesPerSecond = totalFiles / durationSeconds;
+
+            System.out.println("=== SCANNING PERFORMANCE ===");
+            System.out.println("Total files and directories processed: " + totalFiles +
+                             (shouldStop ? " (partial scan due to interruption)" : ""));
+            System.out.printf("Scanning completed in: %.2f seconds%s%n", durationSeconds,
+                             shouldStop ? " (interrupted)" : "");
+            System.out.printf("Processing rate: %.1f items/second%n", filesPerSecond);
+            System.out.println();
+
+            // Query and display some results only if verbose
+            if (verbose) {
+                displaySampleResults(connection);
+
+                // Show the difference between Path and Full File Path columns
+                demonstratePathColumns(connection);
+            } else {
+                if (shouldStop) {
+                    System.out.println("Filesystem scanning interrupted but partial results saved successfully. Use --verbose to see detailed analysis results.");
+                } else {
+                    System.out.println("Filesystem scanning completed successfully. Use --verbose to see detailed analysis results.");
+                }
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error during database insertion: " + e.getMessage());
         } finally {
+            // Always close the inserter
+            try {
+                inserter.close();
+            } catch (Exception e) {
+                System.err.println("Error closing inserter: " + e.getMessage());
+            }
+
+            // Mark processing as complete
+            processingComplete = true;
+
             // Close the access log writer
             if (accessLogWriterArray[0] != null) {
                 accessLogWriterArray[0].println("===============================================");
-                accessLogWriterArray[0].println("Scan completed at: " + java.time.LocalDateTime.now());
+                if (shouldStop) {
+                    accessLogWriterArray[0].println("Scan interrupted by user (Ctrl-C) at: " + java.time.LocalDateTime.now());
+                } else {
+                    accessLogWriterArray[0].println("Scan completed at: " + java.time.LocalDateTime.now());
+                }
                 accessLogWriterArray[0].close();
             }
-            
+
             // Shutdown progress reporter
             progressReporter.shutdown();
             try {
@@ -484,14 +601,14 @@ public class LoadFilesystemMetadata {
         String fileOwner = getFileOwner(filePath);
         String fileExtension = getFileExtension(filePath);
         boolean isHidden = isHiddenFile(filePath);
-        
+
         // Get file ID
         String fileId = getFileId(filePath);
-        
+
         // Get link information
         String linkType = getLinkType(filePath);
         String linkTarget = getLinkTarget(filePath);
-        
+
         // Get file timestamps
         BasicFileAttributes attrs = Files.readAttributes(filePath, BasicFileAttributes.class);
         LocalDateTime creationTime = convertFileTimeToLocalDateTime(attrs.creationTime());
@@ -550,11 +667,11 @@ public class LoadFilesystemMetadata {
         try {
             BasicFileAttributes attrs = Files.readAttributes(filePath, BasicFileAttributes.class);
             Object fileKey = attrs.fileKey();
-            
+
             if (fileKey != null) {
                 return fileKey.toString();
             }
-            
+
             // Try to get more specific file ID based on OS
             if (IS_WINDOWS) {
                 // On Windows, try to get the file index
@@ -583,7 +700,7 @@ public class LoadFilesystemMetadata {
                     // Fall through to return null
                 }
             }
-            
+
             return null;
         } catch (IOException e) {
             return null;
@@ -599,19 +716,19 @@ public class LoadFilesystemMetadata {
     private static boolean isHiddenFile(Path filePath) {
         try {
             Path fileName = filePath.getFileName();
-            
+
             // Handle special case where getFileName() returns null (e.g., root directory "/")
             if (fileName == null) {
                 return false; // Root directory and similar paths are not considered hidden
             }
-            
+
             String fileNameStr = fileName.toString();
-            
+
             // Check if file starts with dot (Unix/Linux/Mac hidden files)
             if (fileNameStr.startsWith(".")) {
                 return true;
             }
-            
+
             // Check using Files.isHidden() (handles Windows hidden attribute and other OS-specific rules)
             return Files.isHidden(filePath);
         } catch (IOException e) {
@@ -631,24 +748,24 @@ public class LoadFilesystemMetadata {
         if (Files.isDirectory(filePath)) {
             return "";
         }
-        
+
         Path fileName = filePath.getFileName();
-        
+
         // Handle special case where getFileName() returns null (e.g., root directory "/")
         if (fileName == null) {
             return ""; // No extension for paths without filename
         }
-        
+
         String fileNameStr = fileName.toString();
-        
+
         // Find the last dot in the filename
         int lastDotIndex = fileNameStr.lastIndexOf('.');
-        
+
         // If no dot found, or dot is at the beginning (hidden file), or dot is at the end, return empty string
         if (lastDotIndex == -1 || lastDotIndex == 0 || lastDotIndex == fileNameStr.length() - 1) {
             return "";
         }
-        
+
         // Return the extension without the leading dot
         return fileNameStr.substring(lastDotIndex + 1);
     }
@@ -675,7 +792,7 @@ public class LoadFilesystemMetadata {
             if (!Files.isDirectory(filePath)) {
                 return false;
             }
-            
+
             // On Windows, junctions are directories that are also symbolic links
             if (IS_WINDOWS) {
                 // A junction on Windows appears as both a directory and a symbolic link
@@ -693,7 +810,7 @@ public class LoadFilesystemMetadata {
                     // DosFileAttributes not available, continue with other checks
                 }
             }
-            
+
             // For Unix/Linux/Mac, check if parent device differs from current device
             // This is a heuristic that works for most mount points
             Path parent = filePath.getParent();
@@ -702,7 +819,7 @@ public class LoadFilesystemMetadata {
                     // Compare file system of directory with its parent
                     FileStore currentStore = Files.getFileStore(filePath);
                     FileStore parentStore = Files.getFileStore(parent);
-                    
+
                     // If they're different file stores, it's likely a mount point
                     return !currentStore.equals(parentStore);
                 } catch (IOException e) {
@@ -710,7 +827,7 @@ public class LoadFilesystemMetadata {
                     return false;
                 }
             }
-            
+
             return false;
         } catch (Exception e) {
             // If we can't determine, assume not a mount point
@@ -728,11 +845,11 @@ public class LoadFilesystemMetadata {
         if (isSymbolicLink(dirPath)) {
             return false;
         }
-        
+
         if (isMountPointOrJunction(dirPath)) {
             return false;
         }
-        
+
         return true;
     }
 
@@ -746,7 +863,7 @@ public class LoadFilesystemMetadata {
         if (isSymbolicLink(filePath)) {
             return "SYMLINK";
         }
-        
+
         if (Files.isDirectory(filePath) && isMountPointOrJunction(filePath)) {
             // Try to determine if it's a mount point or junction
             if (IS_WINDOWS) {
@@ -755,7 +872,7 @@ public class LoadFilesystemMetadata {
                 return "MOUNTPOINT";
             }
         }
-        
+
         return "NONE";
     }
 
@@ -772,7 +889,7 @@ public class LoadFilesystemMetadata {
                 Path target = Files.readSymbolicLink(filePath);
                 return target.toString();
             }
-            
+
             if (Files.isDirectory(filePath) && isMountPointOrJunction(filePath)) {
                 // For mount points and junctions, try to get useful information
                 if (IS_WINDOWS) {
@@ -808,7 +925,7 @@ public class LoadFilesystemMetadata {
             }
             return null;
         }
-        
+
         // Return null for regular files (not links)
         return null;
     }
@@ -870,7 +987,7 @@ public class LoadFilesystemMetadata {
         // Get largest files
         System.out.println("\nLargest files:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"File Size\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"File Size\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Is Directory\" = false ORDER BY \"File Size\" DESC LIMIT 5")) {
             while (result.nextRow()) {
                 System.out.println("  " + result.getString(0) + " (" + formatFileSize(result.getLong(1)) + ") - " + result.getString(2));
@@ -880,7 +997,7 @@ public class LoadFilesystemMetadata {
         // Get sample of directories
         System.out.println("\nSample directories:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"File Owner\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"File Owner\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Is Directory\" = true ORDER BY \"File Name\" LIMIT 5")) {
             while (result.nextRow()) {
                 System.out.println("  " + result.getString(0) + " (Owner: " + result.getString(1) + ") - " + result.getString(2));
@@ -890,7 +1007,7 @@ public class LoadFilesystemMetadata {
         // Get recently modified files
         System.out.println("\nRecently modified files:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"Last Modified Time\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"Last Modified Time\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Is Directory\" = false AND \"Last Modified Time\" IS NOT NULL ORDER BY \"Last Modified Time\" DESC LIMIT 5")) {
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
             while (result.nextRow()) {
@@ -910,7 +1027,7 @@ public class LoadFilesystemMetadata {
         // Get sample hidden files if they exist
         System.out.println("\nSample hidden files:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"File Size\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"File Size\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Is Hidden\" = true AND \"Is Directory\" = false ORDER BY \"File Size\" DESC LIMIT 5")) {
             boolean hasHiddenFiles = false;
             while (result.nextRow()) {
@@ -928,7 +1045,7 @@ public class LoadFilesystemMetadata {
         // Get depth distribution
         System.out.println("\nDepth distribution:");
         try (Result result = connection.executeQuery(
-                "SELECT \"Depth\", COUNT(*) FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"Depth\", COUNT(*) FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " GROUP BY \"Depth\" ORDER BY \"Depth\"")) {
             while (result.nextRow()) {
                 long depth = result.getLong(0);
@@ -940,7 +1057,7 @@ public class LoadFilesystemMetadata {
         // Get deepest files
         System.out.println("\nDeepest files:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"Depth\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"Depth\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Is Directory\" = false ORDER BY \"Depth\" DESC LIMIT 5")) {
             while (result.nextRow()) {
                 String fileName = result.getString(0);
@@ -953,7 +1070,7 @@ public class LoadFilesystemMetadata {
         // Get link information
         System.out.println("\nLink analysis:");
         try (Result result = connection.executeQuery(
-                "SELECT \"Link Type\", COUNT(*) FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"Link Type\", COUNT(*) FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " GROUP BY \"Link Type\" ORDER BY COUNT(*) DESC")) {
             while (result.nextRow()) {
                 String linkType = result.getString(0);
@@ -965,7 +1082,7 @@ public class LoadFilesystemMetadata {
         // Get sample links (symlinks, mount points, junctions)
         System.out.println("\nSample links:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"Link Type\", \"Link Target\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"Link Type\", \"Link Target\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Link Type\" != 'NONE' ORDER BY \"Link Type\", \"File Name\" LIMIT 10")) {
             boolean hasLinks = false;
             while (result.nextRow()) {
@@ -974,7 +1091,7 @@ public class LoadFilesystemMetadata {
                 String linkType = result.getString(1);
                 String linkTarget = result.getString(2);
                 String filePath = result.getString(3);
-                System.out.println("  " + fileName + " (" + linkType + ") -> " + 
+                System.out.println("  " + fileName + " (" + linkType + ") -> " +
                     (linkTarget != null ? linkTarget : "Unknown target") + " - " + filePath);
             }
             if (!hasLinks) {
@@ -985,7 +1102,7 @@ public class LoadFilesystemMetadata {
         // Get file ID statistics
         System.out.println("\nFile ID analysis:");
         try (Result result = connection.executeQuery(
-                "SELECT COUNT(*) FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT COUNT(*) FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"File ID\" IS NOT NULL AND \"File ID\" != ''")) {
             if (result.nextRow()) {
                 long countWithId = result.getLong(0);
@@ -996,7 +1113,7 @@ public class LoadFilesystemMetadata {
         // Get sample file IDs
         System.out.println("\nSample file IDs:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"File ID\", \"Is Directory\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"File ID\", \"Is Directory\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"File ID\" IS NOT NULL AND \"File ID\" != '' ORDER BY \"File Name\" LIMIT 5")) {
             boolean hasFileIds = false;
             while (result.nextRow()) {
@@ -1017,7 +1134,7 @@ public class LoadFilesystemMetadata {
         // Get file extension analysis
         System.out.println("\nFile extension analysis:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Extension\", COUNT(*) as ext_count FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Extension\", COUNT(*) as ext_count FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Is Directory\" = false AND \"File Extension\" IS NOT NULL AND \"File Extension\" != '' " +
                 "GROUP BY \"File Extension\" ORDER BY ext_count DESC LIMIT 10")) {
             boolean hasExtensions = false;
@@ -1035,7 +1152,7 @@ public class LoadFilesystemMetadata {
         // Get sample files by extension
         System.out.println("\nSample files by extension:");
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"File Extension\", \"File Size\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"File Extension\", \"File Size\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Is Directory\" = false AND \"File Extension\" IS NOT NULL AND \"File Extension\" != '' " +
                 "ORDER BY \"File Extension\", \"File Size\" DESC LIMIT 10")) {
             boolean hasFiles = false;
@@ -1071,27 +1188,27 @@ public class LoadFilesystemMetadata {
      */
     private static void demonstratePathColumns(Connection connection) {
         System.out.println("\n=== PATH COLUMN DEMONSTRATION ===");
-        
+
         try (Result result = connection.executeQuery(
-                "SELECT \"File Name\", \"Path\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() + 
+                "SELECT \"File Name\", \"Path\", \"Full Path\" FROM " + FILESYSTEM_METADATA_TABLE.getTableName() +
                 " WHERE \"Is Directory\" = false ORDER BY \"File Name\" LIMIT 5")) {
-            
+
             while (result.nextRow()) {
                 String fileName = result.getString(0);
                 String path = result.getString(1);
                 String fullPath = result.getString(2);
-                
+
                 System.out.println("File: " + fileName);
                 System.out.println("  Directory Path: " + path);
                 System.out.println("  Full Path: " + fullPath);
                 System.out.println();
             }
         }
-        
+
         System.out.println("Note: 'Path' contains the directory without the filename,");
         System.out.println("      'Full Path' contains the complete path including filename.");
     }
-    
+
     /**
      * Truncates a string to the specified length
      */
@@ -1120,7 +1237,7 @@ public class LoadFilesystemMetadata {
     private static String generateDatabaseFilename(String directoryPath) {
         Path path = Paths.get(directoryPath);
         String fileName;
-        
+
         // Handle root directory case
         if (path.getNameCount() == 0 || directoryPath.equals("/")) {
             fileName = "root";
@@ -1128,16 +1245,16 @@ public class LoadFilesystemMetadata {
             // Get the last component of the path (directory name)
             fileName = path.getFileName().toString();
         }
-        
+
         // Handle empty or special directory names
         if (fileName.isEmpty() || fileName.equals(".") || fileName.equals("..")) {
             fileName = "directory";
         }
-        
+
         // Replace invalid filename characters with underscores
         // This covers most common issues across Windows, macOS, and Linux
         fileName = fileName.replaceAll("[<>:\"/\\\\|?*]", "_");
-        
+
         // Handle Windows reserved names
         if (IS_WINDOWS) {
             String upperName = fileName.toUpperCase();
@@ -1145,20 +1262,20 @@ public class LoadFilesystemMetadata {
                 fileName = fileName + "_dir";
             }
         }
-        
+
         // Truncate if too long (keeping some space for the suffix)
         if (fileName.length() > 100) {
             fileName = fileName.substring(0, 100);
         }
-        
+
         // Remove leading/trailing dots and spaces
         fileName = fileName.replaceAll("^[.\\s]+|[.\\s]+$", "");
-        
+
         // If somehow we end up with an empty string, use a default
         if (fileName.isEmpty()) {
             fileName = "filesystem_scan";
         }
-        
+
         return fileName + "_metadata.hyper";
     }
 
@@ -1172,7 +1289,7 @@ public class LoadFilesystemMetadata {
     private static String generateLogFilename(String directoryPath) {
         Path path = Paths.get(directoryPath);
         String fileName;
-        
+
         // Handle root directory case
         if (path.getNameCount() == 0 || directoryPath.equals("/")) {
             fileName = "root";
@@ -1180,16 +1297,16 @@ public class LoadFilesystemMetadata {
             // Get the last component of the path (directory name)
             fileName = path.getFileName().toString();
         }
-        
+
         // Handle empty or special directory names
         if (fileName.isEmpty() || fileName.equals(".") || fileName.equals("..")) {
             fileName = "directory";
         }
-        
+
         // Replace invalid filename characters with underscores
         // This covers most common issues across Windows, macOS, and Linux
         fileName = fileName.replaceAll("[<>:\"/\\\\|?*]", "_");
-        
+
         // Handle Windows reserved names
         if (IS_WINDOWS) {
             String upperName = fileName.toUpperCase();
@@ -1197,20 +1314,20 @@ public class LoadFilesystemMetadata {
                 fileName = fileName + "_dir";
             }
         }
-        
+
         // Truncate if too long (keeping some space for the suffix)
         if (fileName.length() > 100) {
             fileName = fileName.substring(0, 100);
         }
-        
+
         // Remove leading/trailing dots and spaces
         fileName = fileName.replaceAll("^[.\\s]+|[.\\s]+$", "");
-        
+
         // If somehow we end up with an empty string, use a default
         if (fileName.isEmpty()) {
             fileName = "filesystem_scan";
         }
-        
+
         return fileName + "_access_errors.log";
     }
-} 
+}
